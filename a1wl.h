@@ -1,5 +1,7 @@
 //by a111
-//To remove console terminal opening, go to the project's Properties->Linker->System and change the Subsystem to Windows
+//To remove console terminal opening, 
+//(If using Visual Studio): Go to the project's Properties->Linker->System and change the Subsystem to Windows
+//(If using GCC): add '-mwindows' OR '-Wl,--subsystem,windows' to your compile command
 
 //YOU MUST IMPLEMENT IN YOUR CODE:
 //void start()                                 -Called on program startup
