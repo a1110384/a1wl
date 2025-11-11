@@ -1,12 +1,13 @@
 //by a111
+
 //To remove console terminal opening, 
 //(If using Visual Studio): Go to the project's Properties->Linker->System and change the Subsystem to Windows
 //(If using GCC): add '-mwindows' OR '-Wl,--subsystem,windows' to your compile command
 
-//YOU MUST IMPLEMENT IN YOUR CODE:
-//void start()                                 -Called on program startup
-//void update()                                -Called every frame
-//void process(short* buffer, int size)        -Called every audio block (can leave empty if you don't initAudio())
+//FUNCTIONS:
+//void start()                                 -Called on program startup (must implement)
+//void update()                                -Called every frame (must implement)
+//void process(short* buffer, int size)        -Called every audio block (only need if calling initAudio())
 
 #ifndef A1WL_H
 #define A1WL_H
@@ -14,11 +15,12 @@
 #pragma comment(linker, "/SUBSYSTEM:windows")
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "winmm.lib")
-#pragma warning(disable: 28251);
+#pragma warning(disable: 28251)
 
 #include <windows.h>
 #include <dwmapi.h>
 #include <mmsystem.h>
+#include <stdio.h>
 
 #define CHUNK_AMT 4
 #define CHUNK_SIZE 1024
@@ -31,12 +33,16 @@ typedef struct Window {
     int y;
 
 	unsigned int* pixels;
+    int fontHeight;
+    int fontSpacing;
+    unsigned int textCol;
 
     HINSTANCE hInst;
 	HWND hwnd;
 	BITMAPINFO bmi;
 	HBITMAP frame_bitmap;
-	HDC frame_device_context;
+	HDC hdc;
+    HDC drawHDC;
 
 	unsigned char keyDown[256];
 	unsigned char keyPress[256];
@@ -45,11 +51,14 @@ typedef struct Window {
     int fps;
     double targetFrameTimeMs;
 
+    //Audio
     HWAVEOUT waveOut;
     WAVEHDR header[CHUNK_AMT];
     short buffers[CHUNK_AMT][CHUNK_SIZE * 2];
     short bufIndex;
     long sample;
+    void (*process)(short* buffer, int size);
+
 } Window;
 
 struct {
@@ -65,7 +74,6 @@ static LRESULT CALLBACK winProcMsg(HWND hwnd, UINT message, WPARAM wParam, LPARA
 void CALLBACK waveOutProc(HWAVEOUT, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR);
 void start();
 void update();
-void process(short *buffer, int size);
 static void winSize(int w, int h);
 
 
@@ -81,8 +89,10 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     win.y = 300;
     win.targetFrameTimeMs = 1000.0 / 60;
     win.clearCol = 0x00000A0F;
+    win.textCol = 0xFFFFFFFF;
+    win.fontHeight = 12; win.fontSpacing = 1;
 
-    static wchar_t* winClassName = L"Untitled";
+    static const wchar_t* winClassName = L"Untitled";
     static WNDCLASSEX wcx = { 0 };
     wcx.cbSize = sizeof(wcx);
     wcx.lpfnWndProc = winProcMsg;
@@ -97,7 +107,7 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     win.bmi.bmiHeader.biPlanes = 1;
     win.bmi.bmiHeader.biBitCount = 32;
     win.bmi.bmiHeader.biCompression = BI_RGB;
-    win.frame_device_context = CreateCompatibleDC(0);
+    win.hdc = CreateCompatibleDC(0);
 
     win.hwnd = CreateWindowEx(WS_EX_STATICEDGE,
         winClassName, winClassName,
@@ -109,7 +119,7 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     DWM_WINDOW_CORNER_PREFERENCE preference = DWMWCP_DONOTROUND;
     DwmSetWindowAttribute(win.hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
 
-    winSize(600, 400);
+    winSize(600, 400); 
     start();
 
     //Update/Render loop
@@ -141,12 +151,10 @@ static LRESULT CALLBACK winProcMsg(HWND hwnd, UINT message, WPARAM wParam, LPARA
     static char winFocus = 1;
 
     switch (message) {
-    case WM_CLOSE:
-        DestroyWindow(win.hwnd);
+    case WM_CLOSE: DestroyWindow(win.hwnd);
     case WM_QUIT:
     case WM_DESTROY: {
-        win.quit = 1;
-        PostQuitMessage(0);
+        win.quit = 1; PostQuitMessage(0);
     } break;
 
     case WM_KILLFOCUS: winFocus = 0; memset(win.keyDown, 0, 256 * sizeof(win.keyDown[0])); mouse.buttonsDown = 0; break;
@@ -162,10 +170,10 @@ static LRESULT CALLBACK winProcMsg(HWND hwnd, UINT message, WPARAM wParam, LPARA
         keyTran = ((lParam & (1 << 31)) == 0);
         keyHold = ((lParam & (1 << 30)) != 0);
 
-        if (keyTran != keyHold) {
-            win.keyPress[(unsigned char)wParam] = keyTran;
-            win.keyDown[(unsigned char)wParam] = keyTran;
-        }
+        if (keyTran == keyHold) { break; }
+        win.keyPress[(unsigned char)wParam] = keyTran;
+        win.keyDown[(unsigned char)wParam] = keyTran;
+
     } break;
 
     //MOUSE CONTROLS
@@ -202,12 +210,14 @@ static LRESULT CALLBACK winProcMsg(HWND hwnd, UINT message, WPARAM wParam, LPARA
         static PAINTSTRUCT paint;
         static HDC device_context;
         device_context = BeginPaint(hwnd, &paint);
+
         BitBlt(device_context,
             paint.rcPaint.left, paint.rcPaint.top,
             paint.rcPaint.right - paint.rcPaint.left, paint.rcPaint.bottom - paint.rcPaint.top,
-            win.frame_device_context,
+            win.hdc,
             paint.rcPaint.left, paint.rcPaint.top,
             SRCCOPY);
+
         EndPaint(hwnd, &paint);
     } break;
 
@@ -225,7 +235,9 @@ static LRESULT CALLBACK winProcMsg(HWND hwnd, UINT message, WPARAM wParam, LPARA
 
 //AUDIO SETUP
 
-void initAudio(int sampleRate) {
+void initAudio(int sampleRate, void (*proc)(short*, int)) {
+    win.process = proc;
+
     WAVEFORMATEX format;
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nChannels = 2;
@@ -237,9 +249,10 @@ void initAudio(int sampleRate) {
 
     waveOutOpen(&win.waveOut, WAVE_MAPPER, &format, (DWORD_PTR)waveOutProc, (DWORD_PTR)NULL, CALLBACK_FUNCTION);
 
+    //Inital formatting of the waveOut header
     waveOutSetVolume(win.waveOut, 0xFFFFFFFF);
     for (int i = 0; i < CHUNK_AMT; ++i) {
-        win.bufIndex = i; process(&win.buffers[win.bufIndex], CHUNK_SIZE / 2);
+        win.bufIndex = i; win.process(win.buffers[win.bufIndex], CHUNK_SIZE >> 1);
         win.header[i].lpData = (CHAR*)win.buffers[i];
         win.header[i].dwBufferLength = CHUNK_SIZE * 2;
 
@@ -251,12 +264,12 @@ void initAudio(int sampleRate) {
 }
 void CALLBACK waveOutProc(HWAVEOUT wave_out_handle, UINT message, DWORD_PTR instance, DWORD_PTR param1, DWORD_PTR param2) {
     if (message == WOM_DONE) 
-    { 
-        process(&win.buffers[win.bufIndex], CHUNK_SIZE / 2);
-
+    {
+        //Calls your 'process' function to fill the buffer, writes the buffer to waveOut device, then advances the buffer index
+        win.process(win.buffers[win.bufIndex], CHUNK_SIZE >> 1);
         waveOutWrite(win.waveOut, &win.header[win.bufIndex], sizeof(win.header[win.bufIndex]));
         win.bufIndex = (win.bufIndex + 1) % CHUNK_AMT;
-    } 
+    }  
 }
 
 
@@ -269,7 +282,7 @@ static void winFPS(int fps) {
     win.fps = fps;
     win.targetFrameTimeMs = 1000.0 / fps;
 }
-static void winTitle(unsigned short* title) {
+static void winTitle(LPCWSTR title) {
     SetWindowText(win.hwnd, title);
 }
 static void winPos(int x, int y) {
@@ -285,9 +298,12 @@ static void winSize(int w, int h) {
 
     if (win.frame_bitmap) DeleteObject(win.frame_bitmap);
     win.frame_bitmap = CreateDIBSection(NULL, &win.bmi, DIB_RGB_COLORS, (void**)&win.pixels, 0, 0);
-    SelectObject(win.frame_device_context, win.frame_bitmap);
+    if (win.frame_bitmap) {
+        SelectObject(win.hdc, win.frame_bitmap);
+    }
+    
 }
-static void window(unsigned short* title, int w, int h, int x, int y) {
+static void window(LPCWSTR title, int w, int h, int x, int y) {
     winTitle(title); winPos(x, y); winSize(w, h);
 }
 static unsigned char keyDown(unsigned char key) {
@@ -318,9 +334,48 @@ static void cls() {
     for (int i = 0; i < win.width * win.height; i++) {
         win.pixels[i] = win.clearCol;
     }
+    //memset(win.pixels, win.clearCol, sizeof(unsigned int) * win.width * win.height); //DOESNT WORK
+}
+static void box(int x, int y, int w, int h, unsigned int col) {
+    for (int xp = 0; xp < w; xp++) {
+        for (int yp = 0; yp < h; yp++) {
+            pixel(x + xp, y + yp, col);
+        }
+    }
 }
 
-//todo: font
+//FONT FUNCTIONS
 
+void text(const char* text, int x, int y) {
+    LOGFONT lf;
+    HFONT hFont, hOldFont;
 
+    ZeroMemory(&lf, sizeof(LOGFONT));
+    lf.lfHeight = -win.fontHeight;
+    lf.lfWidth = 0;
+    lf.lfWeight = FW_NORMAL;
+    lf.lfCharSet = ANSI_CHARSET;
+    lf.lfQuality = PROOF_QUALITY;
+    lf.lfPitchAndFamily = FIXED_PITCH | FF_MODERN;
+    lf.lfOutPrecision = OUT_RASTER_PRECIS;
+    lstrcpy(lf.lfFaceName, TEXT("System")); // Example bitmap font name
+
+    hFont = CreateFontIndirect(&lf);
+    hOldFont = (HFONT)SelectObject(win.hdc, hFont);
+
+    unsigned int r = (win.textCol & 0x00FF0000) >> 16;
+    unsigned int g = (win.textCol & 0x0000FF00) >> 8;
+    unsigned int b = (win.textCol & 0x000000FF);
+
+    SetTextColor(win.hdc, col(b, g, r)); // White text
+    SetBkMode(win.hdc, TRANSPARENT); // Transparent background
+    SetTextCharacterExtra(win.hdc, win.fontSpacing);
+
+    TextOutA(win.hdc, x * ((int)(win.fontHeight * 0.7f) + win.fontSpacing), y * win.fontHeight, text, lstrlenA(text));
+
+    SelectObject(win.hdc, hOldFont); // Restore original font
+    DeleteObject(hFont); // Delete the created font
+}
+
+ 
 #endif

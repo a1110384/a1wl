@@ -6,16 +6,20 @@ int dotY = 100;
 int dotX = 100;
 int sampleRate = 44100;
 
+void process(short* buffer, int size);
+
 //Called once at startup
 void start() {
-	window(L"title", 600, 400, 10, 10); //Sets the title, width, height, x & y positions of the window
-	initAudio(sampleRate);
+	window(L"title", 600, 400, 1000, 500); //Sets the title, width, height, x & y positions of the window
+	//initAudio(sampleRate, process);
+	winFPS(120);
+	win.clearCol = col(10, 20, 20);
 }
 
 //Called every frame
 void update() {
 	cls(); //Clears the screen
-
+	
 	//Moves the pixel left/right
 	if (keyDown('d')) {
 		dotX += 5;
@@ -33,13 +37,21 @@ void update() {
 	}
 	pixel(dotX, dotY, col(255, 0, 0)); //Draws the pixel
 
+	//Exits the program
+	if (keyPress(VK_ESCAPE)) { win.quit = 1; }
 
-	//Draws pixel near the mouse cursor
-	pixel(mouse.x + 50, mouse.y, col(255, 255, 255));
+	//Draws sqaure near the mouse cursor
+	box(mouse.x + 50, mouse.y, 10, 10, col(255, 255, 255));
 
 
-	//If left-click is down, draws another pixel near the cursor
-	if (mouseDown(M_LEFT)) { pixel(mouse.x + 100, mouse.y, col(255, 255, 255)); }
+	//If left-click is down, draws another sqaure near the cursor
+	if (mouseDown(M_LEFT)) { box(mouse.x + 100, mouse.y, 10, 10, col(255, 255, 255)); }
+
+	//Text rendering
+	win.textCol = col(255, 255, 255);
+	text("text is white!", 2, 2);
+	win.textCol = col(0, 0, 255);
+	text("text is blue!", 30, 5);
 	
 }
 
